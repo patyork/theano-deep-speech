@@ -60,21 +60,25 @@ class RecurrentLayer:
 
         initial = T.zeros((batch_size, output_size))
         self.is_backward = is_backward
-
         self.activation_fn = lambda x: T.cast(T.minimum(x * (x > 0), 20), dtype='float32')#dtype=theano.config.floatX)
 
-        inputs = inputs.reshape((inputs.shape[0]/batch_size, batch_size, inputs.shape[1]))    # (input shape[0]/batch size, batch size, input shape[1])
+
+        # Unstack the inputs into indivisual samples
+        inputs = inputs.reshape((batch_size, inputs.shape[0]/batch_size, inputs.shape[1]))    # (batch size, input shape[0]/batch size, input shape[1])
+
+        # Swap axes to loop over individual time steps (over the entire batch)
+        inputs = T.swapaxes(inputs, 0, 1)
 
         def step(in_t, out_tminus1):
             return self.activation_fn(T.dot(out_tminus1, self.W_ff) + T.dot(in_t, self.W_if) + self.b)
 
-        self.output, _ = theano.scan(
+        output, _ = theano.scan(
             step,
             sequences=[inputs],
             outputs_info=[initial],
             go_backwards=self.is_backward
         )
-        self.output = T.swapaxes(self.output, 0, 1)
+        self.output = T.swapaxes(output, 0, 1)         # Swap axis to get back to (batch size, time step, output)
 
         self.params = [self.W_if, self.W_ff, self.b]
 
@@ -86,22 +90,20 @@ class RecurrentLayer:
 
 
 class SoftmaxLayer:
-    def __init__(self, inputsf, inputsb, input_size, output_size, parameters=None):
+    def __init__(self, inputs, input_size, output_size, parameters=None):
 
         if parameters is None:
-            self.Wf = U.create_shared(U.initial_weights(input_size, output_size/2), name='Wf')
-            self.Wb = U.create_shared(U.initial_weights(input_size, output_size/2), name='Wb')
+            self.W = U.create_shared(U.initial_weights(input_size, output_size), name='W')
             self.b = U.create_shared(U.initial_weights(output_size), name='b')
         else:
-            self.Wf = theano.shared(parameters['Wf'], name='Wf')
-            self.Wb = theano.shared(parameters['Wb'], name='Wb')
+            self.W = theano.shared(parameters['W'], name='W')
             self.b = theano.shared(parameters['b'], name='b')
 
         self.output, _ = theano.scan(
-            lambda x1, x2: T.nnet.softmax( T.concatenate( (T.dot(x1, self.Wf), T.dot(x2, self.Wb)), axis=1) + self.b ),
-            sequences=[inputsf, inputsb]
+            lambda x: T.nnet.softmax(T.dot(x, self.W) + self.b),
+            sequences=[inputs]
         )
-        self.params = [self.Wf, self.Wb, self.b]
+        self.params = [self.W, self.b]
 
     def get_parameters(self):
         params = {}
@@ -172,7 +174,9 @@ class BRNN:
             self.ff3 = FeedForwardLayer(self.ff2.output, 2048, 2048, rng=srng, dropout_rate=dropoutRate)
             self.rf = RecurrentLayer(self.ff3.output, 2048, 1024, batch_size, False)     # Forward layer
             self.rb = RecurrentLayer(self.ff3.output, 2048, 1024, batch_size, True)      # Backward layer
-            self.s = SoftmaxLayer(self.rf.output, self.rb.output, 2*1024, self.output_dimensionality)
+
+            # REVERSE THE BACKWARDS RECURRENT OUTPUTS IN TIME (from [T-1, 0] ===> [0, T-1]
+            self.s = SoftmaxLayer(T.concatenate((self.rf.output, self.rb.output[:, ::-1, :]), axis=2), 2*1024, self.output_dimensionality)
 
         else:
             self.ff1 = FeedForwardLayer(input_stack, self.input_dimensionality, 2048, parameters=params[0], rng=srng, dropout_rate=dropoutRate)
@@ -180,7 +184,9 @@ class BRNN:
             self.ff3 = FeedForwardLayer(self.ff2.output, 2048, 2048, parameters=params[2], rng=srng, dropout_rate=dropoutRate)
             self.rf = RecurrentLayer(self.ff3.output, 2048, 1024, False, parameters=params[3])     # Forward layer
             self.rb = RecurrentLayer(self.ff3.output, 2048, 1024, True, parameters=params[4])      # Backward layer
-            self.s = SoftmaxLayer(self.rf.output, self.rb.output, 2*1024, self.output_dimensionality, parameters=params[5])
+
+            # REVERSE THE BACKWARDS RECURRENT OUTPUTS IN TIME (from [T-1, 0] ===> [0, T-1]
+            self.s = SoftmaxLayer(T.concatenate((self.rf.output, self.rb.output[:, ::-1, :]), axis=2), 2*1024, self.output_dimensionality, parameters=params[5])
 
 
         ctc = CTCLayer(self.s.output, label_stack, self.output_dimensionality-1, batch_size)
@@ -200,14 +206,7 @@ class BRNN:
             outputs=[ctc.cost],
             updates=updates
         )
-        
-        # Print the picture graphs
-        # after compilation
-        if not os.path.exists('pics'):
-            os.mkdir('pics')
-        theano.printing.pydotprint(self.trainer,
-                           outfile="pics/logreg_pydotprint_predic.png",
-                           var_with_name_simple=True)
+
 
     def dump(self, f_path):
         f = file(f_path, 'wb')

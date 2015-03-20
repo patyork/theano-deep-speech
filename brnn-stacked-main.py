@@ -102,8 +102,8 @@ for length in lp_lens:
     batch_dict[length] = (np.asarray(label_of_len, dtype='int32'), np.asarray(padded, dtype=theano.config.floatX))
 
 
-visual_samples_y = batch_dict[lp_lens[5]][0][0:10]
-visual_samples_x = batch_dict[lp_lens[5]][1][0:10]
+visual_samples_y = batch_dict[lp_lens[5]][0][0:5]
+visual_samples_x = batch_dict[lp_lens[5]][1][0:5]
 
 print visual_samples_y.shape, visual_samples_x.shape
 print [seq_to_str(s) for s in visual_samples_y]
@@ -111,7 +111,7 @@ print [seq_to_str(s) for s in visual_samples_y]
 
 # PARAMETERS
 epoch_size = 100        # mini-batches per epoch (model is stored at the end of this many mini-batches)
-batch_size = 10        # mini-batch size
+batch_size = 5        # mini-batch size
 
 # HYPER-PARAMETERS
 learning_rate = .01
@@ -127,15 +127,16 @@ rng = np.random.RandomState(int(time.time()))
 
 
 duration = time.time()
-network = net.create_network(input_dim, alphabet_len+1, batch_size=10, learning_rate=learning_rate, momentum=momentum_coefficient)
+network = net.create_network(input_dim, alphabet_len+1, batch_size=batch_size, learning_rate=learning_rate, momentum=momentum_coefficient)
 print 'Network compiled in %.3fs' % (time.time() - duration)
 
-for i in np.arange(50):
+
+for i in np.arange(10):
     duration = time.time()
     new_shape = (visual_samples_x.shape[0]*visual_samples_x.shape[1], input_dim)
     output = network.trainer(visual_samples_x.reshape(new_shape), visual_samples_y, 0.1)[0]
 
-    print output, time.time() - duration
+    print output.shape, output, time.time() - duration
 
 
 raw_input("asdf")
