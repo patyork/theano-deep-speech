@@ -34,7 +34,7 @@ class FeedForwardLayer:
             self.W = theano.shared(parameters['W'], name='W')
             self.b = theano.shared(parameters['b'], name='b')
 
-        self.output = self.activation_fn(T.dot(inputs, self.W) + self.b) * rng.binomial(size=(output_size,), p=1.0-dropout_rate)
+        self.output = T.cast(self.activation_fn(T.dot(inputs, self.W) + self.b) * rng.binomial(size=(output_size,), p=1.0-dropout_rate), dtype='float32')
 
         self.params = [self.W, self.b]
 
@@ -58,10 +58,13 @@ class RecurrentLayer:
             W_ff = theano.shared(parameters['W_ff'], name='W_ff')
             b = theano.shared(parameters['b'], name='b')
 
-        initial = U.create_shared(U.initial_weights(output_size))
+        initial = T.zeros((2, output_size))
+        #initial = U.create_shared(U.initial_weights(2, output_size))    # (batch size, output size)
         self.is_backward = is_backward
 
-        self.activation_fn = lambda x: T.minimum(x * (x > 0), 20)
+        self.activation_fn = lambda x: T.cast(T.minimum(x * (x > 0), 20), dtype='float32')#dtype=theano.config.floatX)
+
+        inputs = inputs.reshape((inputs.shape[0]/2, 2, inputs.shape[1]))    # (input shape[0]/batch size, batch size, input shape[1])
 
         def step(in_t, out_tminus1):
             return self.activation_fn(T.dot(out_tminus1, W_ff) + T.dot(in_t, W_if) + b)
@@ -72,6 +75,7 @@ class RecurrentLayer:
             outputs_info=[initial],
             go_backwards=self.is_backward
         )
+        self.output = T.swapaxes(self.output, 0, 1)
 
         self.params = [W_if, W_ff, b]
 
@@ -92,7 +96,10 @@ class SoftmaxLayer:
             W = theano.shared(parameters['W'], name='W')
             b = theano.shared(parameters['b'], name='b')
 
-        self.output = T.nnet.softmax(T.dot(inputs, W) + b)
+        self.output, _ = theano.scan(
+            lambda x: T.nnet.softmax(T.dot(x, W) + b),
+            sequences=[inputs]
+        )
         self.params = [W, b]
 
     def get_parameters(self):
@@ -124,7 +131,7 @@ class CTCLayer():
         recurrence_relation = T.cast(recurrence_relation, 'float64')
 
 
-        inpt = T.reshape(inpt, (batch_size, inpt.shape[0]/batch_size, 30))
+        #inpt = T.reshape(inpt, (batch_size, inpt.shape[0]/batch_size, 30))
 
         def step(input, label):
             '''
@@ -144,7 +151,7 @@ class CTCLayer():
             sequences=[inpt, labels]
         )
 
-        self.cost = T.mean(probs)
+        self.cost = T.cast(T.mean(probs), dtype='float32')
         self.params = []
 
 
@@ -162,20 +169,20 @@ class BRNN:
             self.ff1 = FeedForwardLayer(input_stack, self.input_dimensionality, 2048, rng=srng, dropout_rate=dropoutRate)
             self.ff2 = FeedForwardLayer(self.ff1.output, 2048, 2048, rng=srng, dropout_rate=dropoutRate)
             self.ff3 = FeedForwardLayer(self.ff2.output, 2048, 2048, rng=srng, dropout_rate=dropoutRate)
-            '''self.rf = RecurrentLayer(self.ff3.output, 2048, 1024, False)     # Forward layer
+            self.rf = RecurrentLayer(self.ff3.output, 2048, 1024, False)     # Forward layer
             self.rb = RecurrentLayer(self.ff3.output, 2048, 1024, True)      # Backward layer
-            self.s = SoftmaxLayer(T.concatenate((self.rf.output, self.rb.output), axis=1), 2*1024, self.output_dimensionality)'''
+            self.s = SoftmaxLayer(T.concatenate((self.rf.output, self.rb.output), axis=2), 2*1024, self.output_dimensionality)
 
         else:
             self.ff1 = FeedForwardLayer(input_stack, self.input_dimensionality, 2048, parameters=params[0], rng=srng, dropout_rate=dropoutRate)
             self.ff2 = FeedForwardLayer(self.ff1.output, 2048, 2048, parameters=params[1], rng=srng, dropout_rate=dropoutRate)
             self.ff3 = FeedForwardLayer(self.ff2.output, 2048, 2048, parameters=params[2], rng=srng, dropout_rate=dropoutRate)
-            '''self.rf = RecurrentLayer(self.ff3.output, 500, 250, False, parameters=params[3])     # Forward layer
-            self.rb = RecurrentLayer(self.ff3.output, 500, 250, True, parameters=params[4])      # Backward layer
-            self.s = SoftmaxLayer(T.concatenate((self.rf.output, self.rb.output), axis=1), 2*250, self.output_dimensionality, parameters=params[5])'''
+            self.rf = RecurrentLayer(self.ff3.output, 2048, 1024, False, parameters=params[3])     # Forward layer
+            self.rb = RecurrentLayer(self.ff3.output, 2048, 1024, True, parameters=params[4])      # Backward layer
+            self.s = SoftmaxLayer(T.concatenate((self.rf.output, self.rb.output), axis=2), 2*250, self.output_dimensionality, parameters=params[5])
 
 
-        '''ctc = CTCLayer(self.s.output, label_stack, self.output_dimensionality-1, batch_size)
+        ctc = CTCLayer(self.s.output, label_stack, self.output_dimensionality-1, batch_size)
         
         updates = []
         for layer in (self.s, self.rb, self.rf, self.ff3, self.ff2, self.ff1):
@@ -184,13 +191,13 @@ class BRNN:
                 #grad = T.grad(ctc.cost, p)
                 #updates.append((p, p - learning_rate * param_update))
                 #updates.append((param_update, momentum * param_update + (1. - momentum) * grad))
-                updates.append((p, p - learning_rate*T.grad(ctc.cost, p)))'''
+                updates.append((p, p - T.cast(learning_rate, dtype='float32')*T.grad(ctc.cost, p)))
 
         self.trainer = theano.function(
-            inputs=[input_stack, dropoutRate],#, label_stack],
-            outputs=[self.ff3.output]
-            #outputs=[ctc.cost],
-            #updates=updates
+            inputs=[input_stack, label_stack, dropoutRate],
+            #outputs=[ctc.cost]
+            outputs=[ctc.cost],
+            updates=updates
         )
 
     def dump(self, f_path):

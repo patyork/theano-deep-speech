@@ -125,18 +125,18 @@ input_dim = visual_samples_x.shape[2]
 net = nn.Network()
 rng = np.random.RandomState(int(time.time()))
 
-
-
-network = net.create_network(input_dim, alphabet_len+1, batch_size=2, learning_rate=learning_rate, momentum=momentum_coefficient)
+print visual_samples_x[0][0][0].dtype
 
 
 duration = time.time()
-for i in np.arange(10):
-    new_shape = (visual_samples_x.shape[0]*visual_samples_x.shape[1], input_dim)
-    output = network.trainer(visual_samples_x.reshape(new_shape), 0.1)[0]
+network = net.create_network(input_dim, alphabet_len+1, batch_size=2, learning_rate=learning_rate, momentum=momentum_coefficient)
+print 'Network compiled in %.3fs' % (time.time() - duration)
 
-    print output.shape, np.sum(output)
-print time.time()-duration
+for i in np.arange(50):
+    new_shape = (visual_samples_x.shape[0]*visual_samples_x.shape[1], input_dim)
+    output = network.trainer(visual_samples_x.reshape(new_shape), visual_samples_y, 0.1)[0]
+
+    print output
 
 
 raw_input("asdf")
