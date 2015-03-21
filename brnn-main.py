@@ -8,7 +8,7 @@ from matplotlib.lines import Line2D
 import cPickle as pickle
 import theano
 
-import brnn_stacked as nn
+import brnn as nn
 
 
 def str_to_seq(str):
@@ -80,205 +80,62 @@ f.close()
 
 samples = samples[:1000]
 
-samples_sorted = sorted(samples, key=lambda s: len(s[0]))
-lens = [len(s[0]) for s in samples_sorted]
-lp_lens = [key for key, _ in groupby(lens)]
+visual_samples = [samples[0], samples[-1]]
 
-batch_dict = {}
-for length in lp_lens:
-    # Get samples of length
-    sample_of_len = []
-    label_of_len = []
-    for s in samples:
-        if len(s[0]) == length:
-            sample_of_len.append(np.asarray(s[1], dtype=theano.config.floatX))
-            label_of_len.append(np.asarray(s[0], dtype='int32'))
-
-    pad_to = np.max([s.shape[0] for s in sample_of_len])
-    padded = []
-    for s in sample_of_len:
-
-        pad = np.zeros((pad_to-s.shape[0], s.shape[1]))
-        padded.append( np.concatenate((s, pad), axis=0))
-
-    batch_dict[length] = (np.asarray(label_of_len, dtype='int32'), np.asarray(padded, dtype=theano.config.floatX))
-
-
-visual_samples_y = batch_dict[lp_lens[5]][0][0:5]
-visual_samples_x = batch_dict[lp_lens[5]][1][0:5]
-
-print visual_samples_y.shape, visual_samples_x.shape
-print [seq_to_str(s) for s in visual_samples_y]
-
-
-# PARAMETERS
-epoch_size = 100        # mini-batches per epoch (model is stored at the end of this many mini-batches)
-batch_size = 5        # mini-batch size
 
 # HYPER-PARAMETERS
 learning_rate = .01
-momentum_coefficient = .25
+momentum_coefficient = .5
+dropout_rate = .1
 
 # Automatically Generated Parameters
 alphabet_len = len(alphabet)
-input_dim = visual_samples_x.shape[2]
+input_dim = 560
 
 
-net = nn.Network()
+net = nn.Network()      # Network wrapper
 rng = np.random.RandomState(int(time.time()))
-
-
-duration = time.time()
-network = net.create_network(input_dim, alphabet_len+1, batch_size=batch_size, learning_rate=learning_rate, momentum=momentum_coefficient)
-print 'Network compiled in %.3fs' % (time.time() - duration)
-
-
-for i in np.arange(10):
-    duration = time.time()
-    new_shape = (visual_samples_x.shape[0]*visual_samples_x.shape[1], input_dim)
-    output = network.trainer(visual_samples_x.reshape(new_shape), visual_samples_y, 0.1)[0]
-
-    print output.shape, output, time.time() - duration
-
-
-raw_input("asdf")
-
-
-
-
 
 # create network
 try:
     last_good = -1
-    restart = False
     #log_file = file('/var/www/html/status.html', 'a')
     log_file = file('status.html', 'a')
     duration = time.time()
     if last_good == -1:
-        network = net.create_network(560, len(alphabet)+1, .0005, .75)        #x3 for the window
+        network = net.create_network(input_dim, alphabet_len+1, learning_rate=learning_rate, momentum=momentum_coefficient)
         log_it(log_file, etc='created Network - num samples:' + str(len(samples)) + '\tDuration: ' + str(time.time()-duration))
     else:
-        picklePath = 'saved_models_batch/' + str(last_good) + '.pkl'
+        picklePath = 'saved_models/' + str(last_good) + '.pkl'
         print 'loading from', picklePath
         network = net.load_network(picklePath, 560, len(alphabet)+1, .0005, .75)        #x3 for the window
         log_it(log_file, etc='loaded Network - num samples:' + str(len(samples)) + '\tDuration: ' + str(time.time()-duration))
     log_file.close()
 
-    if last_good == -1:
-        error_avg_epoch = 0.0
-        duration = time.time()
-
-        # For each bucket of samples
-        for length in lp_lens:
-
-            sequence_length = length
-
-            for i in np.arange(0, math.ceil(sequence_length/batch_size)):
-                duration2 = time.time()
-
-                temp_model = network.get_parameters()
-
-                num_samples_in_selected = batch_dict[sequence_length][1].shape[0] - (i*batch_size)    # get the number of available samples in the bucket
-
-                if num_samples_in_selected < batch_size:
-                    minibatch_start = (i*batch_size)
-                    minibatch_end = (i*batch_size) + num_samples_in_selected
-                else:
-                    minibatch_start = i * batch_size
-                    minibatch_end = minibatch_start + batch_size
-                    
-                print 'Shape:', batch_dict[sequence_length][1][minibatch_start:minibatch_end, :, :].shape
-
-                cost, _ = network.trainer(batch_dict[sequence_length][1][minibatch_start:minibatch_end, :, :], batch_dict[sequence_length][0][minibatch_start:minibatch_end, :])
-
-                if math.isnan(cost) or math.isinf(cost):
-                    restart = True
-                    network.set_parameters(temp_model)
-                    #raw_input("Hit NAN on sequential first-round input!! Very bad...")
-                    print("Hit NAN on sequential first-round input!! Very bad...")
-                    break
-
-                error_avg_epoch += cost
-                print '\t', cost, minibatch_end-minibatch_start, time.time()-duration2
-
-
-
-
     # Start a new Epoch
     for epoch in np.arange(last_good+1, 100000):
 
+        rng.shuffle(samples)
+        prev_model = net.get_network()
+
         error_avg_epoch = 0.0
         duration = time.time()
+        for sample in samples:
+            error_avg_epoch += network.trainer(sample[1], sample[0], dropout_rate)[0]
 
-        # For each desired mini-batch
-        for minibatch in np.arange(epoch_size):
-            temp_model = network.get_parameters()
-            
-            duration2 = time.time()
+            if error_avg_epoch == np.nan or error_avg_epoch == np.inf:
+                net.set_network(prev_model)
+                print "hit nan/inf"
+                break
 
-            sequence_length_index = rng.randint(0, len(lp_lens))                                # randomly select a bucket of samples to create a mini-batch from
-            sequence_length = lp_lens[sequence_length_index]
+        if not (error_avg_epoch == np.nan or error_avg_epoch == np.inf):
 
-            num_samples_in_selected = batch_dict[sequence_length][1].shape[0]    # get the number of available samples in the bucket
-            
-            if False: minibatch_start = 0; minibatch_end = batch_size
-            elif num_samples_in_selected < batch_size:
-                minibatch_start = 0
-                minibatch_end = num_samples_in_selected
-            else:
-                minibatch_start = rng.randint(0, len(lp_lens))
-                minibatch_end = minibatch_start + batch_size
+            print 'Epoch:\t%.3fs\t' % (epoch, time.time()-duration)
 
-            cost, _ = network.trainer(batch_dict[sequence_length][1][minibatch_start:minibatch_end, :, :], batch_dict[sequence_length][0][minibatch_start:minibatch_end, :])
+            for sample in visual_samples:
+                cst, out = network.tester(sample[1], sample[0], 0.0)
 
-            if math.isnan(cost) or math.isinf(cost):
-                #restart = True
-                #break
-                network.set_parameters(temp_model)
-                print "hit nan - undoing batch"
-
-            error_avg_epoch += cost
-            print '\t', cost, minibatch_end-minibatch_start, time.time()-duration2
-
-
-        log_file = file('status.html', 'a') #file('/var/www/html/status.html', 'a')
-        if not restart:
-
-            print 'Avg. Error:', error_avg_epoch, ' || over', batch_dict[sequence_length][1].shape, '\tsamples\t | in %.3fs' % (time.time() - duration)
-            
-            pred = network.tester(visual_samples_x)[0]
-            for i in np.arange(2):
-                log_it(log_file, etc='\t' + seq_to_str(visual_sample_y[i]) + ' || ' + seq_to_str([np.argmax(x) for x in pred[i]]))
-
-            if epoch % 10: #epoch_size:
-                dumpPath = 'saved_models_batch/' + str(epoch) + '.pkl'
-                print 'Saving to: ', dumpPath
-                net.dump_network(dumpPath)
-
-                last_good = epoch
-
-        else:
-            log_it(log_file, nan=True)
-            restart = False
-
-            duration = time.time()
-            picklePath = 'saved_models_batch/' + str(last_good) + '.pkl'
-            print 'loading from', picklePath
-            network = net.load_network(picklePath, 560, len(alphabet)+1, .0005, .75)        #x3 for the window
-            log_it(log_file, etc='loaded Network - num samples:' + str(len(samples)) + '\tDuration: ' + str(time.time()-duration))
-        log_file.close()
-
+                print '\t%.5f\t' % (cst), seq_to_str(sample[0]), ' || ', seq_to_str(out)
 
 except KeyboardInterrupt:
     pass
-
-# shuffle lp_lens
-
-# take lp_lens[0] as length
-
-    # random from [0, batch_dict[length]-batch_size]
-
-    # batch train on the random slice
-
-    # every Xth training batch, save model, shuffle
-
