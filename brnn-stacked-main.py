@@ -102,8 +102,8 @@ for length in lp_lens:
     batch_dict[length] = (np.asarray(label_of_len, dtype='int32'), np.asarray(padded, dtype=theano.config.floatX))
 
 
-visual_samples_y = batch_dict[lp_lens[5]][0][[0, 5]]
-visual_samples_x = batch_dict[lp_lens[5]][1][[0, 5]]
+visual_samples_y = batch_dict[lp_lens[5]][0][0:10]
+visual_samples_x = batch_dict[lp_lens[5]][1][0:10]
 
 print visual_samples_y.shape, visual_samples_x.shape
 print [seq_to_str(s) for s in visual_samples_y]
@@ -125,18 +125,17 @@ input_dim = visual_samples_x.shape[2]
 net = nn.Network()
 rng = np.random.RandomState(int(time.time()))
 
-print visual_samples_x[0][0][0].dtype
-
 
 duration = time.time()
-network = net.create_network(input_dim, alphabet_len+1, batch_size=2, learning_rate=learning_rate, momentum=momentum_coefficient)
+network = net.create_network(input_dim, alphabet_len+1, batch_size=10, learning_rate=learning_rate, momentum=momentum_coefficient)
 print 'Network compiled in %.3fs' % (time.time() - duration)
 
 for i in np.arange(50):
+    duration = time.time()
     new_shape = (visual_samples_x.shape[0]*visual_samples_x.shape[1], input_dim)
     output = network.trainer(visual_samples_x.reshape(new_shape), visual_samples_y, 0.1)[0]
 
-    print output
+    print output, time.time() - duration
 
 
 raw_input("asdf")
