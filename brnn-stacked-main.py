@@ -78,6 +78,8 @@ f = open('win3_l35.pkl', 'rb')
 samples = pickle.load(f)
 f.close()
 
+samples = samples[:1000]
+
 samples_sorted = sorted(samples, key=lambda s: len(s[0]))
 lens = [len(s[0]) for s in samples_sorted]
 lp_lens = [key for key, _ in groupby(lens)]

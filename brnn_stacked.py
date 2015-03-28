@@ -28,21 +28,15 @@ class FeedForwardLayer:
         self.activation_fn = lambda x: T.minimum(x * (x > 0), 20)
 
         if parameters is None:
-            self.W = U.create_shared(U.initial_weights(input_size, output_size), name='W')
-            self.b = U.create_shared(U.initial_weights(output_size), name='b')
+            W = U.create_shared(U.initial_weights(input_size, output_size), name='W')
+            b = U.create_shared(U.initial_weights(output_size), name='b')
         else:
-            self.W = theano.shared(parameters['W'], name='W')
-            self.b = theano.shared(parameters['b'], name='b')
+            W = theano.shared(parameters['W'], name='W')
+            b = theano.shared(parameters['b'], name='b')
 
-        self.output = T.cast(self.activation_fn(T.dot(inputs, self.W) + self.b) * rng.binomial(size=(output_size,), p=1.0-dropout_rate), dtype='float32')
+        self.output = T.cast(self.activation_fn(T.dot(inputs, W) + b) * rng.binomial(size=(output_size,), p=1.0-dropout_rate), dtype='float32')
 
-        self.params = [self.W, self.b]
-
-    def get_parameters(self):
-        params = {}
-        for param in self.params:
-            params[param.name] = param.get_value()
-        return params
+        self.params = [W, b]
 
 
 
@@ -50,13 +44,13 @@ class RecurrentLayer:
     def __init__(self, inputs, input_size, output_size, batch_size, is_backward=False, parameters=None):
 
         if parameters is None:
-            self.W_if = U.create_shared(U.initial_weights(input_size, output_size), name='W_if')
-            self.W_ff = U.create_shared(U.initial_weights(output_size, output_size), name='W_ff')
-            self.b = U.create_shared(U.initial_weights(output_size), name='b')
+            W_if = U.create_shared(U.initial_weights(input_size, output_size), name='W_if')
+            W_ff = U.create_shared(U.initial_weights(output_size, output_size), name='W_ff')
+            b = U.create_shared(U.initial_weights(output_size), name='b')
         else:
-            self.W_if = theano.shared(parameters['W_if'], name='W_if')
-            self.W_ff = theano.shared(parameters['W_ff'], name='W_ff')
-            self.b = theano.shared(parameters['b'], name='b')
+            W_if = theano.shared(parameters['W_if'], name='W_if')
+            W_ff = theano.shared(parameters['W_ff'], name='W_ff')
+            b = theano.shared(parameters['b'], name='b')
 
         initial = T.zeros((batch_size, output_size))
         self.is_backward = is_backward
@@ -70,7 +64,7 @@ class RecurrentLayer:
         inputs = T.swapaxes(inputs, 0, 1)
 
         def step(in_t, out_tminus1):
-            return self.activation_fn(T.dot(out_tminus1, self.W_ff) + T.dot(in_t, self.W_if) + self.b)
+            return self.activation_fn(T.dot(out_tminus1, W_ff) + T.dot(in_t, W_if) + b)
 
         output, _ = theano.scan(
             step,
@@ -80,36 +74,24 @@ class RecurrentLayer:
         )
         self.output = T.swapaxes(output, 0, 1)         # Swap axis to get back to (batch size, time step, output)
 
-        self.params = [self.W_if, self.W_ff, self.b]
-
-    def get_parameters(self):
-        params = {}
-        for param in self.params:
-            params[param.name] = param.get_value()
-        return params
+        self.params = [W_if, W_ff, b]
 
 
 class SoftmaxLayer:
     def __init__(self, inputs, input_size, output_size, parameters=None):
 
         if parameters is None:
-            self.W = U.create_shared(U.initial_weights(input_size, output_size), name='W')
-            self.b = U.create_shared(U.initial_weights(output_size), name='b')
+            W = U.create_shared(U.initial_weights(input_size, output_size), name='W')
+            b = U.create_shared(U.initial_weights(output_size), name='b')
         else:
-            self.W = theano.shared(parameters['W'], name='W')
-            self.b = theano.shared(parameters['b'], name='b')
+            W = theano.shared(parameters['W'], name='W')
+            b = theano.shared(parameters['b'], name='b')
 
         self.output, _ = theano.scan(
-            lambda x: T.nnet.softmax(T.dot(x, self.W) + self.b),
+            lambda x: T.nnet.softmax(T.dot(x, W) + b),
             sequences=[inputs]
         )
-        self.params = [self.W, self.b]
-
-    def get_parameters(self):
-        params = {}
-        for param in self.params:
-            params[param.name] = param.get_value()
-        return params
+        self.params = [W, b]
 
 
 
@@ -170,20 +152,20 @@ class BRNN:
 
         if params is None:
             self.ff1 = FeedForwardLayer(input_stack, self.input_dimensionality, 2048, rng=srng, dropout_rate=dropoutRate)
-            self.ff2 = FeedForwardLayer(self.ff1.output, 2048, 2048, rng=srng, dropout_rate=dropoutRate)
-            self.ff3 = FeedForwardLayer(self.ff2.output, 2048, 2048, rng=srng, dropout_rate=dropoutRate)
-            self.rf = RecurrentLayer(self.ff3.output, 2048, 1024, batch_size, False)     # Forward layer
-            self.rb = RecurrentLayer(self.ff3.output, 2048, 1024, batch_size, True)      # Backward layer
+            self.ff2 = FeedForwardLayer(self.ff1.output, 2048, 1024, rng=srng, dropout_rate=dropoutRate)
+            self.ff3 = FeedForwardLayer(self.ff2.output, 1024, 512, rng=srng, dropout_rate=dropoutRate)
+            self.rf = RecurrentLayer(self.ff3.output, 512, 256, batch_size, False)     # Forward layer
+            self.rb = RecurrentLayer(self.ff3.output, 512, 256, batch_size, True)      # Backward layer
 
             # REVERSE THE BACKWARDS RECURRENT OUTPUTS IN TIME (from [T-1, 0] ===> [0, T-1]
-            self.s = SoftmaxLayer(T.concatenate((self.rf.output, self.rb.output[:, ::-1, :]), axis=2), 2*1024, self.output_dimensionality)
+            self.s = SoftmaxLayer(T.concatenate((self.rf.output, self.rb.output[:, ::-1, :]), axis=2), 2*256, self.output_dimensionality)
 
         else:
             self.ff1 = FeedForwardLayer(input_stack, self.input_dimensionality, 2048, parameters=params[0], rng=srng, dropout_rate=dropoutRate)
-            self.ff2 = FeedForwardLayer(self.ff1.output, 2048, 2048, parameters=params[1], rng=srng, dropout_rate=dropoutRate)
-            self.ff3 = FeedForwardLayer(self.ff2.output, 2048, 2048, parameters=params[2], rng=srng, dropout_rate=dropoutRate)
-            self.rf = RecurrentLayer(self.ff3.output, 2048, 1024, False, parameters=params[3])     # Forward layer
-            self.rb = RecurrentLayer(self.ff3.output, 2048, 1024, True, parameters=params[4])      # Backward layer
+            self.ff2 = FeedForwardLayer(self.ff1.output, 2048, 1024, parameters=params[1], rng=srng, dropout_rate=dropoutRate)
+            self.ff3 = FeedForwardLayer(self.ff2.output, 1024, 1024, parameters=params[2], rng=srng, dropout_rate=dropoutRate)
+            self.rf = RecurrentLayer(self.ff3.output, 1024, 560, False, parameters=params[3])     # Forward layer
+            self.rb = RecurrentLayer(self.ff3.output, 1024, 560, True, parameters=params[4])      # Backward layer
 
             # REVERSE THE BACKWARDS RECURRENT OUTPUTS IN TIME (from [T-1, 0] ===> [0, T-1]
             self.s = SoftmaxLayer(T.concatenate((self.rf.output, self.rb.output[:, ::-1, :]), axis=2), 2*1024, self.output_dimensionality, parameters=params[5])
